@@ -1,0 +1,85 @@
+#!/usr/bin/env perl
+
+############################################################################
+# FILE:                merge-conflict-util                                 #
+# DESCRIPTION:         Utility for resolving merge conflicts in files      #
+# AUTHOR:              Jonathan G. Rennison <j.g.rennison@gmail.com>       #
+# LICENSE:             New BSD License, see LICENSE.txt                    #
+#                                                                          #
+# Copyright © Jonathan G. Rennison 2021                                    #
+############################################################################
+
+use strict;
+use warnings;
+
+use File::Slurp qw(edit_file);
+use Getopt::Long;
+
+sub usage {
+	my ($fh, $retcode) = @_;
+	$fh //= \*STDERR;
+	$retcode //= 1;
+	print $fh <<'EOF';
+usage: merge-conflict-util [options] <files...>
+
+    -m, --mode <mode>        Merge conflict resolution mode to use
+               ours          Keep our side of the conflict
+               first         Same as ours
+               theirs        Keep their side of the conflict
+               second        Same as theirs
+               union         Keep both sides of the conflict, in ours + theirs order
+               union-rev     Keep both sides of the conflict, in theirs + ours order (reverse)
+    -v, --verbose            Be verbose
+    -h, -?, --help           Show this help
+
+Resolve conflicts delimited by <<<<<<<, =======, and >>>>>>> markers.
+Files are edited in place.
+The -m/--mode option must be set.
+
+EOF
+	exit $retcode;
+}
+
+my ($help, $mode);
+my $verbose = 0;
+
+Getopt::Long::Configure("no_auto_abbrev", "bundling");
+GetOptions (
+	"mode|m=s"     => \$mode,
+	"help|h|?"     => \$help,
+	"verbose|v+"   => \$verbose,
+) or usage();
+usage(\*STDOUT, 0) if $help;
+
+usage() unless (scalar @ARGV && $mode =~ /^(ours|first|theirs|second|union|union-rev)$/);
+
+my $replacements = 0;
+
+my $op;
+if ($mode eq "ours" || $mode eq "first") {
+	$op = sub { return $_[0]; };
+}
+if ($mode eq "theirs" || $mode eq "second") {
+	$op = sub { return $_[1]; };
+}
+if ($mode eq "union") {
+	$op = sub { return $_[0] . $_[1]; };
+}
+if ($mode eq "union-rev") {
+	$op = sub { return $_[1] . $_[0]; };
+}
+
+my $replace = sub {
+	$replacements++;
+	$op->(@_);
+};
+
+for my $file (@ARGV) {
+	$replacements = 0;
+	edit_file(sub {
+		s/<<<<<<<[^\x0D\x0A]*?(?>\x0D\x0A|[\x0D\x0A])(.*?)=======[^\x0D\x0A]*?(?>\x0D\x0A|[\x0D\x0A])(.*?)>>>>>>>[^\x0D\x0A]*?(?>\x0D\x0A|[\x0D\x0A])/$replace->($1, $2)/seg;
+	}, $file, { binmode => ':raw' });
+	if ($verbose) {
+		print STDERR "$file: $replacements conflict(s) resolved\n";
+	}
+}
